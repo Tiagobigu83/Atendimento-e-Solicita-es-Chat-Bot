@@ -35,19 +35,19 @@ app.use(express.json());
 // Ensure at least one manager user exists
 const ensureAdminUser = async () => {
   try {
-    const { count } = await supabase.from("users").select("*", { count: 'exact', head: true });
+    const { count } = await supabase.from("profiles").select("*", { count: 'exact', head: true });
     if (count === 0) {
-      console.log("No users found. Creating default manager user...");
-      await supabase.from("users").insert([
+      console.log("No profiles found. Creating default manager user...");
+      await supabase.from("profiles").insert([
         { 
-          name: "Gestor SEURB", 
+          full_name: "Gestor SEURB", 
           email: "admin@seurb.com", 
-          role: "manager" 
+          role: "admin" 
         },
         { 
-          name: "Tiago", 
+          full_name: "Tiago", 
           email: "tiago.angelica@gmail.com", 
-          role: "manager" 
+          role: "admin" 
         }
       ]);
       console.log("Default manager users created: admin@seurb.com and tiago.angelica@gmail.com / admin123");
@@ -64,7 +64,7 @@ app.post("/api/login", async (req, res) => {
     
     try {
       const { data: user, error: supabaseError } = await supabase
-        .from("users")
+        .from("profiles")
         .select("*")
         .ilike("email", email)
         .single();
@@ -72,19 +72,19 @@ app.post("/api/login", async (req, res) => {
       if (supabaseError) {
         console.error("Supabase Login Error:", supabaseError);
         if (supabaseError.code === 'PGRST116') {
-          return res.status(401).json({ message: `E-mail não cadastrado: ${email}. Use a tela de cadastro ou execute o SQL no Supabase.` });
+          return res.status(401).json({ message: `E-mail não cadastrado: ${email}. Verifique a tabela 'profiles'.` });
         }
-        return res.status(500).json({ message: "Erro de conexão com o Supabase. Verifique se as variáveis de ambiente (URL e KEY) estão configuradas no Vercel." });
+        return res.status(500).json({ message: "Erro de conexão com o Supabase." });
       }
 
       if (user && password === "admin123") {
         res.json(user);
       } else {
-        res.status(401).json({ message: "Senha incorreta. Para este protótipo, use a senha padrão: admin123" });
+        res.status(401).json({ message: "Senha incorreta. Use: admin123" });
       }
     } catch (error) {
       console.error("Login API Error:", error);
-      res.status(500).json({ message: "Erro interno no servidor ao processar o login." });
+      res.status(500).json({ message: "Erro interno no servidor." });
     }
   });
 
@@ -185,31 +185,31 @@ app.post("/api/login", async (req, res) => {
 
   // Users CRUD
   app.get("/api/users", async (req, res) => {
-    const { data: users } = await supabase.from("users").select("*");
+    const { data: users } = await supabase.from("profiles").select("*");
     res.json(users || []);
   });
 
   app.post("/api/users", async (req, res) => {
-    const { name, email, role } = req.body;
+    const { full_name, email, role } = req.body;
     const { data } = await supabase
-      .from("users")
-      .insert([{ name, email, role }])
+      .from("profiles")
+      .insert([{ full_name, email, role }])
       .select()
       .single();
-    res.json({ id: data?.id });
+    res.json(data);
   });
 
   app.put("/api/users/:id", async (req, res) => {
-    const { name, email, role } = req.body;
+    const { full_name, email, role } = req.body;
     await supabase
-      .from("users")
-      .update({ name, email, role })
+      .from("profiles")
+      .update({ full_name, email, role })
       .eq("id", req.params.id);
     res.json({ success: true });
   });
 
   app.delete("/api/users/:id", async (req, res) => {
-    await supabase.from("users").delete().eq("id", req.params.id);
+    await supabase.from("profiles").delete().eq("id", req.params.id);
     res.json({ success: true });
   });
 

@@ -5,6 +5,11 @@ import { createServer as createViteServer } from "vite";
 import { supabase } from "./server_supabase.ts";
 import { format } from "date-fns";
 import { GoogleGenAI } from "@google/genai";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -48,16 +53,30 @@ async function startServer() {
   // Auth
   app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
-    const { data: user } = await supabase
-      .from("users")
-      .select("*")
-      .eq("email", email)
-      .single();
+    
+    try {
+      const { data: user, error: supabaseError } = await supabase
+        .from("users")
+        .select("*")
+        .ilike("email", email)
+        .single();
 
-    if (user && password === "admin123") {
-      res.json(user);
-    } else {
-      res.status(401).json({ message: "Credenciais inválidas. Use a senha padrão admin123" });
+      if (supabaseError) {
+        console.error("Supabase Login Error:", supabaseError);
+        if (supabaseError.code === 'PGRST116') {
+          return res.status(401).json({ message: `E-mail não cadastrado: ${email}. Use a tela de cadastro ou execute o SQL no Supabase.` });
+        }
+        return res.status(500).json({ message: "Erro de conexão com o Supabase. Verifique se as variáveis de ambiente (URL e KEY) estão configuradas no Vercel." });
+      }
+
+      if (user && password === "admin123") {
+        res.json(user);
+      } else {
+        res.status(401).json({ message: "Senha incorreta. Para este protótipo, use a senha padrão: admin123" });
+      }
+    } catch (error) {
+      console.error("Login API Error:", error);
+      res.status(500).json({ message: "Erro interno no servidor ao processar o login." });
     }
   });
 
@@ -781,6 +800,11 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.join(__dirname, "dist")));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    });
   }
 
   io.on("connection", (socket) => {

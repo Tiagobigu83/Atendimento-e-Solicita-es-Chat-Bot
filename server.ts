@@ -19,6 +19,32 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Ensure at least one manager user exists
+  const ensureAdminUser = async () => {
+    try {
+      const { count } = await supabase.from("users").select("*", { count: 'exact', head: true });
+      if (count === 0) {
+        console.log("No users found. Creating default manager user...");
+        await supabase.from("users").insert([
+          { 
+            name: "Gestor SEURB", 
+            email: "admin@seurb.com", 
+            role: "manager" 
+          },
+          { 
+            name: "Tiago", 
+            email: "tiago.angelica@gmail.com", 
+            role: "manager" 
+          }
+        ]);
+        console.log("Default manager users created: admin@seurb.com and tiago.angelica@gmail.com / admin123");
+      }
+    } catch (e) {
+      console.error("Error ensuring admin user:", e);
+    }
+  };
+  ensureAdminUser();
+
   // Auth
   app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;

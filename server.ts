@@ -223,12 +223,19 @@ async function startServer() {
       .select()
       .single();
 
-    await supabase
+    const { data: session } = await supabase
       .from("chat_sessions")
       .update({ last_message_at: new Date().toISOString() })
-      .eq("id", sessionId);
+      .eq("id", sessionId)
+      .select()
+      .single();
     
     io.to(`session_${sessionId}`).emit("new_message", message);
+
+    // If human sends a message, send to real WhatsApp if available
+    if (sender === 'user' && session?.whatsapp_number_id && session?.citizen_phone) {
+      await sendWhatsAppMessage(session.whatsapp_number_id, session.citizen_phone, content);
+    }
     
     res.json(message);
   });
@@ -239,55 +246,204 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Mock WhatsApp Webhook
-  app.post("/api/webhook/whatsapp", async (req, res) => {
-    const { phone, message, name } = req.body;
-    
-    let { data: session } = await supabase
-      .from("chat_sessions")
-      .select("*")
-      .eq("citizen_phone", phone)
-      .single();
+  // WhatsApp Webhook Verification (GET)
+  app.get("/api/webhook/whatsapp", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
 
-    if (!session) {
-      const { data: newSession } = await supabase
-        .from("chat_sessions")
-        .insert([{ citizen_phone: phone, citizen_name: name }])
-        .select()
-        .single();
-      session = newSession;
-    }
+    // You can set this token in your Meta App Dashboard
+    const VERIFY_TOKEN = "seurb_ananindeua_token";
 
-    // Save user message
-    const { data: userMsg } = await supabase
-      .from("messages")
-      .insert([{ session_id: session.id, sender: 'citizen', content: message }])
-      .select()
-      .single();
-
-    await supabase
-      .from("chat_sessions")
-      .update({ last_message_at: new Date().toISOString() })
-      .eq("id", session.id);
-    
-    io.emit("chat_update");
-    io.to(`session_${session.id}`).emit("new_message", userMsg);
-
-    // Bot Logic if status is 'bot'
-    if (session.status === 'bot') {
-      const botResponse = await handleBotLogic(session, message);
-      if (botResponse) {
-        const { data: botMsg } = await supabase
-          .from("messages")
-          .insert([{ session_id: session.id, sender: 'bot', content: botResponse }])
-          .select()
-          .single();
-        io.to(`session_${session.id}`).emit("new_message", botMsg);
+    if (mode && token) {
+      if (mode === "subscribe" && token === VERIFY_TOKEN) {
+        console.log("WEBHOOK_VERIFIED");
+        res.status(200).send(challenge);
+      } else {
+        res.sendStatus(403);
       }
     }
-
-    res.json({ success: true });
   });
+
+  // WhatsApp Webhook (POST)
+  app.post("/api/webhook/whatsapp", async (req, res) => {
+    try {
+      const body = req.body;
+      console.log("Webhook received:", JSON.stringify(body));
+
+      // Check if it's a WhatsApp Meta request
+      if (body.object === "whatsapp_business_account") {
+        const entry = body.entry?.[0];
+        const changes = entry?.changes?.[0];
+        const value = changes?.value;
+        const messageObj = value?.messages?.[0];
+        const contact = value?.contacts?.[0];
+
+        if (messageObj && messageObj.type === "text") {
+          const phone = messageObj.from;
+          const message = messageObj.text.body;
+          const name = contact?.profile?.name || "Cidadão";
+          const phoneNumberId = value.metadata.phone_number_id;
+
+          await processIncomingMessage(phone, message, name, phoneNumberId);
+        }
+        return res.status(200).send("EVENT_RECEIVED");
+      } 
+      
+      // Fallback for Mock/Simulated requests
+      if (req.body.phone && req.body.message) {
+        const { phone, message, name } = req.body;
+        console.log("Simulated message received:", { phone, message, name });
+        await processIncomingMessage(phone, message, name);
+        return res.json({ success: true });
+      }
+
+      console.warn("Unknown webhook payload:", body);
+      res.sendStatus(404);
+    } catch (error) {
+      console.error("Webhook Error:", error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  });
+
+  async function processIncomingMessage(phone: string, message: string, name: string, phoneNumberId?: string) {
+    try {
+      console.log(`Processing message from ${phone}: ${message}`);
+      
+      let { data: session, error: sessionError } = await supabase
+        .from("chat_sessions")
+        .select("*")
+        .eq("citizen_phone", phone)
+        .maybeSingle();
+
+      if (sessionError) {
+        console.error("Error fetching session:", sessionError);
+      }
+
+      if (!session) {
+        console.log(`Creating new session for ${phone}`);
+        const { data: newSession, error: insertError } = await supabase
+          .from("chat_sessions")
+          .insert([{ 
+            citizen_phone: phone, 
+            citizen_name: name
+          }])
+          .select()
+          .single();
+        
+        if (insertError) {
+          console.error("Error creating session:", insertError);
+          // Try again without citizen_name if it failed
+          const { data: retrySession, error: retryError } = await supabase
+            .from("chat_sessions")
+            .insert([{ citizen_phone: phone }])
+            .select()
+            .single();
+          
+          if (retryError) {
+            console.error("Critical error creating session:", retryError);
+            return;
+          }
+          session = retrySession;
+        } else {
+          session = newSession;
+        }
+      }
+
+      // If we have a phoneNumberId, try to update it (might fail if column missing, but we catch it)
+      if (phoneNumberId && !session.whatsapp_number_id) {
+        const { error: updateError } = await supabase.from("chat_sessions").update({ whatsapp_number_id: phoneNumberId }).eq("id", session.id);
+        if (updateError) {
+          console.warn("Could not update whatsapp_number_id (column might be missing):", updateError);
+        } else {
+          session.whatsapp_number_id = phoneNumberId;
+        }
+      }
+
+      // Save user message
+      const { data: userMsg, error: msgError } = await supabase
+        .from("messages")
+        .insert([{ session_id: session.id, sender: 'citizen', content: message }])
+        .select()
+        .single();
+
+      if (msgError) {
+        console.error("Error saving message:", msgError);
+        return;
+      }
+
+      await supabase
+        .from("chat_sessions")
+        .update({ last_message_at: new Date().toISOString() })
+        .eq("id", session.id);
+      
+      io.emit("chat_update");
+      io.to(`session_${session.id}`).emit("new_message", userMsg);
+
+      // Bot Logic if status is 'bot'
+      if (session.status === 'bot') {
+        try {
+          const botResponse = await handleBotLogic(session, message);
+          if (botResponse) {
+            const { data: botMsg, error: botMsgError } = await supabase
+              .from("messages")
+              .insert([{ session_id: session.id, sender: 'bot', content: botResponse }])
+              .select()
+              .single();
+            
+            if (botMsgError) {
+              console.error("Error saving bot message:", botMsgError);
+            } else {
+              io.to(`session_${session.id}`).emit("new_message", botMsg);
+
+              // Send real WhatsApp message if we have the credentials
+              if (session.whatsapp_number_id) {
+                await sendWhatsAppMessage(session.whatsapp_number_id, phone, botResponse);
+              }
+            }
+          }
+        } catch (botError) {
+          console.error("Error in bot logic:", botError);
+        }
+      }
+    } catch (error) {
+      console.error("Error in processIncomingMessage:", error);
+    }
+  }
+
+  async function sendWhatsAppMessage(phoneNumberId: string, to: string, text: string) {
+    const { data: settings } = await supabase.from("settings").select("*").eq("key", "whatsapp_api_key").single();
+    const apiKey = settings?.value;
+
+    if (!apiKey) {
+      console.warn("WhatsApp API Key not found in settings");
+      return;
+    }
+
+    try {
+      const response = await fetch(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: to,
+          type: "text",
+          text: { body: text },
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        console.error("WhatsApp API Error:", result);
+      }
+    } catch (error) {
+      console.error("Error sending WhatsApp message:", error);
+    }
+  }
 
   async function handleBotLogic(session: any, message: string) {
     const now = new Date();
@@ -307,11 +463,16 @@ async function startServer() {
     if (message.length > 100 || message.toLowerCase().includes("ajuda") || message.toLowerCase().includes("problema")) {
       try {
         const aiResponse = await ai.models.generateContent({
-          model: "gemini-2.0-flash",
+          model: "gemini-3-flash-preview",
           config: { systemInstruction: config.bot_instructions || "Você é um assistente da SEURB Ananindeua." },
           contents: `Cidadão (${session.citizen_name || 'Desconhecido'}): ${message}`
         });
-        return aiResponse.text;
+        const responseText = aiResponse.text || "Desculpe, não consegui processar sua solicitação agora.";
+        
+        // Update state to MAIN_MENU if AI was used, to keep flow
+        await supabase.from("chat_sessions").update({ current_state: 'MAIN_MENU' }).eq("id", session.id);
+        
+        return responseText;
       } catch (e) {
         console.error("Gemini Error:", e);
       }

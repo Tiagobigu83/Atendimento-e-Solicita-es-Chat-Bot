@@ -106,12 +106,19 @@ export default function Chat() {
           </div>
           <button 
             onClick={async () => {
-              const phone = `919${Math.floor(10000000 + Math.random() * 90000000)}`;
-              await window.fetch('/api/webhook/whatsapp', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone, message: 'Olá', name: 'Cidadão Teste' })
-              });
+              try {
+                const phone = `919${Math.floor(10000000 + Math.random() * 90000000)}`;
+                const res = await window.fetch('/api/webhook/whatsapp', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ phone, message: 'Olá', name: 'Cidadão Teste' })
+                });
+                if (!res.ok) throw new Error('Falha ao simular');
+                console.log('Simulação enviada com sucesso');
+              } catch (err) {
+                console.error(err);
+                alert('Erro ao simular conversa. Verifique o console.');
+              }
             }}
             className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
           >

@@ -119,6 +119,16 @@ export default function Config() {
                     value={window.location.origin + '/api/webhook/whatsapp'}
                   />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Verify Token (Meta Dashboard)</label>
+                  <input 
+                    type="text" 
+                    readOnly
+                    className="w-full px-4 py-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 text-xs font-mono"
+                    value="seurb_ananindeua_token"
+                  />
+                  <p className="text-[10px] text-slate-400">Use este token ao configurar o Webhook no painel do Meta for Developers.</p>
+                </div>
               </div>
             </div>
           )}

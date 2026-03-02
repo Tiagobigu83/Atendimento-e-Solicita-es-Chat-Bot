@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
-import { supabase } from "../server_supabase.ts";
+import { supabase } from "./supabase";
 import { format } from "date-fns";
 import { GoogleGenAI } from "@google/genai";
 import path from "path";
@@ -30,7 +30,19 @@ app.get("/api/health", (req, res) => {
 // Ensure at least one manager user exists
 const ensureAdminUser = async () => {
   try {
-    const { count } = await supabase.from("users").select("*", { count: 'exact', head: true });
+    // Check if Supabase is configured
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+      console.error("Supabase environment variables are missing!");
+      return;
+    }
+
+    const { count, error } = await supabase.from("users").select("*", { count: 'exact', head: true });
+    
+    if (error) {
+      console.error("Error checking users table (maybe it doesn't exist yet?):", error.message);
+      return;
+    }
+
     if (count === 0) {
       console.log("No users found. Creating default manager user...");
       await supabase.from("users").insert([
@@ -48,7 +60,7 @@ const ensureAdminUser = async () => {
       console.log("Default manager users created: admin@seurb.com and tiago.angelica@gmail.com / admin123");
     }
   } catch (e) {
-    console.error("Error ensuring admin user:", e);
+    console.error("Fatal error in ensureAdminUser:", e);
   }
 };
 ensureAdminUser();
@@ -57,25 +69,35 @@ ensureAdminUser();
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
     
+    if (!email || !password) {
+      return res.status(400).json({ message: "E-mail e senha são obrigatórios." });
+    }
+
     try {
       const { data: user, error: supabaseError } = await supabase
         .from("users")
         .select("*")
-        .ilike("email", email)
-        .single();
+        .ilike("email", email.trim())
+        .maybeSingle();
 
       if (supabaseError) {
         console.error("Supabase Login Error:", supabaseError);
-        if (supabaseError.code === 'PGRST116') {
-          return res.status(401).json({ message: `E-mail não cadastrado: ${email}. Use a tela de cadastro ou execute o SQL no Supabase.` });
-        }
-        return res.status(500).json({ message: "Erro de conexão com o Supabase. Verifique se as variáveis de ambiente (URL e KEY) estão configuradas no Vercel." });
+        return res.status(500).json({ 
+          message: "Erro de conexão com o Supabase.",
+          details: supabaseError.message,
+          hint: "Verifique as variáveis SUPABASE_URL e SUPABASE_ANON_KEY no Vercel e se a tabela 'users' existe."
+        });
       }
 
-      if (user && password === "admin123") {
-        res.json(user);
+      if (!user) {
+        return res.status(401).json({ message: `Usuário não encontrado: ${email}. Verifique se rodou o SQL no Supabase.` });
+      }
+
+      if (password === "admin123") {
+        const { password: _, ...userWithoutPassword } = user;
+        return res.json(userWithoutPassword);
       } else {
-        res.status(401).json({ message: "Senha incorreta. Para este protótipo, use a senha padrão: admin123" });
+        return res.status(401).json({ message: "Senha incorreta. Use a senha padrão: admin123" });
       }
     } catch (error) {
       console.error("Login API Error:", error);

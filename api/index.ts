@@ -2,7 +2,16 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
-import { supabase } from "./supabase";
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('Supabase credentials not found. Please check your environment variables.');
+}
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 import { format } from "date-fns";
 import { GoogleGenAI } from "@google/genai";
 import path from "path";

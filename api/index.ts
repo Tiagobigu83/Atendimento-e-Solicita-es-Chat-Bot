@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
-import { supabase } from "./server_supabase.ts";
+import { supabase } from "../server_supabase.ts";
 import { format } from "date-fns";
 import { GoogleGenAI } from "@google/genai";
 import path from "path";
@@ -22,6 +22,10 @@ const io = new Server(httpServer, {
 });
 
 app.use(express.json());
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", env: process.env.NODE_ENV, vercel: !!process.env.VERCEL });
+});
 
 // Ensure at least one manager user exists
 const ensureAdminUser = async () => {

@@ -42,8 +42,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('seurb_user', JSON.stringify(userData));
         return { success: true };
       } else {
-        const error = await res.json();
-        return { success: false, message: error.message };
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+          const error = await res.json();
+          return { success: false, message: error.message };
+        } else {
+          const text = await res.text();
+          console.error("Non-JSON error response:", text);
+          return { success: false, message: `Erro do servidor (${res.status}). Verifique as logs do Vercel.` };
+        }
       }
     } catch (e) {
       return { success: false, message: "Erro ao conectar com o servidor." };
